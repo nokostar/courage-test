@@ -1,0 +1,40 @@
+ 
+/*set_rate_limiter(20, true);
+*/
+     rawAid= LOAD  USING CookieLoadFunction('AID', 'false') AS  cookiesMap:map[];
+
+  if (rawAid.cookiesMap#'AID' IS NULL) 
+    then
+   
+       addErrorMessage (
+             key_named('')
+             with_value('MISSING AID')); 
+    else 
+          ai_bag  =  GENERATE rawAid.cookiesMap#'AID' AS v:bag { i:tuple ( exp_time:long, values:bag { val:tuple ( v:chararray)})};
+          
+          user_id= GENERATE ai_bag.v.i.values.$0.$0 AS user_id:chararray; 
+
+          current = GENERATE GetUnixEpochTime() * 1000l AS ts:long;
+           
+          shards = GENERATE CurrentYearlyQuarterStartTime (current.ts,'user_composite_overall') AS current_shard:chararray;      
+          
+          log(shards.current_shard, INFO);        
+
+          json = GENERATE  com.nytimes.eval.function.composite.GetCompositeDataContainer (shards.current_shard, user_id.user_id, true, true) AS json:map[];
+          
+          IF (IsEmptyMap(json.json))
+              THEN
+              
+                 shards = GENERATE PreviousYearlyQuarterStartTime (current.ts,'user_composite_overall') AS current_shard:chararray;
+              
+                 json = GENERATE  com.nytimes.eval.function.composite.GetCompositeDataContainer ('composite_test', user_id.user_id) AS json:map[];
+              
+           ENDIF;   
+              
+          
+         setMapValues(
+             key_named('m')
+             with_values(json.json));  
+           
+     endif;
+ 

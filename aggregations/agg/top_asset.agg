@@ -1,0 +1,108 @@
+rawRecords = LOAD  USING com.nytimes.eval.function.UPTLoadFunction('\\x7F') AS (
+    ts:long,
+    ip:chararray,
+    tracker:chararray,
+    logIP:chararray,
+    requestType:chararray,
+    path:chararray,
+    query:chararray,
+    reply:chararray,
+    userAgent:chararray,
+    destination:chararray,
+    queryJson:chararray,
+    urlJson:chararray,
+    refererJson:chararray,
+    cookiesJson:chararray,
+    nytsJson:chararray,
+    nytdJson:chararray,
+    nytmJson:chararray);
+
+
+records = GENERATE
+    rawRecords.ts * 1000l AS ts:long,
+    rawRecords.userAgent AS userAgent:chararray,
+    com.nytimes.eval.function.JSONDecode(rawRecords.urlJson) AS url:map[];
+
+
+recordDetails = GENERATE
+
+    ((  records.url#'queryParsed' IS NOT NULL AND
+         records.url#'queryParsed'#'pagewanted' IS NOT NULL ) ?
+          records.url#'queryParsed'#'pagewanted' : '' ) AS multiPage:chararray,
+
+
+    ((  records.url#'scheme' IS NOT NULL AND
+    records.url#'host' IS NOT NULL AND
+    records.url#'path' IS NOT NULL) ?
+    com.nytimes.eval.function.Concat( records.url#'scheme','://',records.url#'host',records.url#'path') : '' ) AS story:chararray;
+;
+cfshard=GENERATE NextMonthStartTime(records.ts,'assets') AS ext:chararray;
+
+ 
+if ( recordDetails.story NEQ  ''  
+    AND  ( recordDetails.multiPage EQ '' OR recordDetails.multiPage EQ 'all')
+    AND NOT(records.url#'path' MATCHES '/slideshow/.*-\\d+.html')
+    AND com.nytimes.eval.function.glassasset.IsGlassAsset(recordDetails.story)
+ )
+ then
+        asset_details = GENERATE com.nytimes.eval.function.glassasset.GetGlassAsset ( recordDetails.story) AS glass_asset_map:map[];
+        type = GENERATE asset_details.glass_asset_map#'type' AS t:chararray;
+        if ( asset_details.glass_asset_map IS NOT NULL AND (type.t EQ 'Article'  OR  type.t EQ 'BlogPost' OR type.t EQ 'Video' OR type.t EQ 'InteractiveGraphics' ) ) 
+            then
+                                            aggregate   using
+                                                categorical
+                                                         on ( type.t )
+                                                         as_dimension('type')
+                                                         with_description (' asset in type ')
+                                                         with_rollup(false)
+                                                         (
+                                                           categorical 
+                                                             	on (  recordDetails.story ) 
+                                                                with_top(20)
+                                                                as_dimension('asset')
+                                                                with_description ('asset on type wise breakup ')
+                                                         )
+                                                         with_user_scopes ( ALL('_all_') )
+                                                         with_dimensions (YEAR_MONTH_DAY(records.ts))
+                                                         with_shard(cfshard.ext)
+                                                         with_alias ('type');
+                                             aggregate   using
+                                                categorical
+                                                         on ( asset_details.glass_asset_map#'section' )
+                                                         as_dimension('section')
+                                                         with_description (' asset in section ')
+                                                         with_rollup(false)
+                                                         (
+                                                           categorical 
+                                                             	on ( recordDetails.story ) 
+                                                                with_top(20)
+                                                                as_dimension('asset')
+                                                                with_description ('asset on section wise breakup ')
+                                                         )
+                                                         with_user_scopes ( ALL('_all_') )
+                                                         with_dimensions (YEAR_MONTH_DAY(records.ts))
+                                                         with_shard(cfshard.ext)
+                                                         with_alias ('s_a');
+                                            
+                                               aggregate   using
+                                                categorical
+                                                              on ( Concat(asset_details.glass_asset_map#'section','_',asset_details.glass_asset_map#'subsection') )
+                                                              as_dimension('s_ss')
+                                                              with_description (' section sub section  ')
+                                                              with_rollup(false)
+                                                              (
+
+                                                                   categorical
+                                                                     on (  recordDetails.story )
+                                                                     with_top(20)
+                                                                     as_dimension('asset')
+                                                                     with_description ('asset on section/subsection wise breakup ')
+                                                               )
+                                                 with_user_scopes ( ALL('_all_') )
+                                                 with_dimensions (YEAR_MONTH_DAY(records.ts),YEAR_MONTH(records.ts))
+                                                 with_shard(cfshard.ext)
+                                                 with_alias ('s_ss_a');
+
+                         endif;
+endif;
+

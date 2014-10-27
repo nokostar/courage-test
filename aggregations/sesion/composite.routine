@@ -1,0 +1,71 @@
+rawRecords = LOAD  USING com.nytimes.eval.function.UPTLoadFunction('\\x7F') AS (
+    ts:long,
+    ip:chararray,
+    tracker:chararray,
+    logIP:chararray,
+    requestType:chararray,
+    path:chararray,
+    query:chararray,
+    reply:chararray,
+    userAgent:chararray,
+    destination:chararray,
+    queryJson:chararray,
+    urlJson:chararray,
+    refererJson:chararray,
+    cookiesJson:chararray,
+    nytsJson:chararray,
+    nytdJson:chararray,
+    nytmJson:chararray);
+
+
+records = GENERATE
+    rawRecords.ip AS ip:chararray,
+    rawRecords.ts * 1000l AS ts:long,
+    rawRecords.userAgent AS userAgent:chararray,
+    com.nytimes.eval.function.JSONDecode(rawRecords.queryJson) AS queryMap:map[],
+    com.nytimes.eval.function.JSONDecode(rawRecords.cookiesJson) AS cookiesMap:map[],
+    com.nytimes.eval.function.JSONDecode(rawRecords.urlJson) AS url:map[],
+    com.nytimes.eval.function.JSONDecode(rawRecords.nytmJson) AS nytmMap:map[],
+    com.nytimes.eval.function.JSONDecode(refererJson) AS refererMap:map[],
+     com.nytimes.eval.function.JSONDecode(nytmJso) AS nytmJson:map[];;
+
+
+recordDetails = GENERATE
+     ((records.userAgent matches 'Firefox') ? 'Firefox'
+       : (records.userAgent matches 'Chrome')? 'Chrome' 
+       :  (records.userAgent matches 'Safari') ? 'Safari'
+       : (records.userAgent matches 'Opera') ?'Opera'
+       : (records.userAgent matches 'MSIE') ?'IE' :'Blank') AS ua:chararray,
+     com.nytimes.eval.function.url(rawRecords.urlJson#'query') AS queryStringMap:map[],
+      records.ip AS ip:chararray,
+      records.url#'path' AS path:chararray,
+      records.queryMap#'p' AS p:chararray,
+      records.nytmJson#'v' AS v:int;
+      
+recordDetailsFinal = GENERATE
+        recordDetails.ua AS ua:chararray,
+      ( (recordDetails.queryStringMap IN NOT NULL AND recordDetails.queryStringMap#'campaignId' IS NOT NULL) ? recordDetails.queryStringMap#'campaignId': 'Blank') AS cid:chararray,
+      recordDetails.ip AS ip:chararray,
+      recordDetails.url#'path' AS path:chararray,
+      recordDetails.queryMap#'p' AS p:chararray,
+      recordDetails.v AS v:chararray;
+
+cfshard=GENERATE NextMonthStartTime(records.ts,'subscriptions') AS ext:chararray;
+
+IF (  recordDetailsFinal.path IS NOT NULL AND  recordDetailsFinal.path NEQ ''
+                AND  recordDetailsFinal.path matches '.*purchase.*'
+                AND  recordDetailsFinal.p IS NOT NULL
+                AND recordDetailsFinal.p  MATCHES '.*Thank You.*'
+   )
+   then
+         location = GENERATE com.nytimes.eval.function.ip.Iploc(recordDetailsFinal.ip) AS loc:tuple(ccCode:chararray,ccName:chararray,province:chararray,city:chararray,zip:chararray);
+         aggregate
+         using
+         cube(recordDetails.ua, recordDetails.cid, recordDetailsFinal.v).with_cols('UA', 'campaignId', 'meterCount')
+         rollup(location.loc.ccName,location.loc.province,location.loc.city,location.loc.zip).with_cols('country','state','city','zipcode')
+         with_user_scopes ( ALL('_all_') )
+         with_dimensions (YEAR_MONTH_DAY(records.ts))
+         with_shard(cfshard.ext)
+         with_alias ('sub_conv_agg');
+ ENDIF;
+

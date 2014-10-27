@@ -1,0 +1,17 @@
+ current = GENERATE GetUnixEpochTime() * 1000l AS ts:long;
+ 
+ cfshard=GENERATE NextMonthStartTime(current.ts,'test') AS ext:chararray;
+
+data = GENERATE com.nytimes.eval.function.statetransitions.GetMatrix('LP_ALL') AS unit:tuple(data:bag{unit:tuple(unit:double)},columns:tuple(c:chararray));
+ 
+ aggregate
+         using
+         cube('firefox',  'US').with_cols('UA','country')
+         with_user_scopes ( ALL('_all_') )
+          with_matrix(data.unit.data, data.unit.columns).with_matrix_exponential_decay(current.ts,0.95)
+         with_dimensions (YEAR_MONTH_DAY(current.ts))        
+         with_shard(cfshard.ext)
+         with_alias ('test_agg');
+
+         
+
